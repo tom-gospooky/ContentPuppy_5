@@ -14,7 +14,6 @@ class LinkedInSavedPostsExporter {
     this.browser = null;
     this.page = null;
     this.posts = new Map(); // Use Map to ensure unique activityIds
-    this.realUrlsExtracted = 0; // Counter for real URLs extracted
   }
 
   async init() {
@@ -179,268 +178,11 @@ class LinkedInSavedPostsExporter {
     }
   }
 
-  async getOriginalPostUrlFromDOM(postElement) {
+  // Simplified: Just extract activity ID for fallback URL generation
+  async getActivityIdFromElement(postElement) {
     try {
-      // Try to extract URL directly from DOM elements (faster, more reliable)
-      const urlData = await postElement.evaluate((element) => {
-        const foundUrls = [];
-        let activityId = null;
-        let profileUsername = null;
-        
-        // Extract activity ID
-        const chameleonElement = element.querySelector('[data-chameleon-result-urn*="activity:"]');
-        if (chameleonElement) {
-          const urn = chameleonElement.getAttribute('data-chameleon-result-urn');
-          const match = urn.match(/activity:(\d+)/);
-          if (match) activityId = match[1];
-        }
-        
-        // If no activity ID from chameleon, try other sources
-        if (!activityId) {
-          const allLinks = element.querySelectorAll('a[href*="activity"]');
-          for (const link of allLinks) {
-            const href = link.getAttribute('href');
-            const match = href.match(/activity:(\d{19})/);
-            if (match) {
-              activityId = match[1];
-              break;
-            }
-          }
-        }
-        
-        // Look for profile username in profile links
-        const profileLinks = element.querySelectorAll('a[href*="/in/"]');
-        for (const link of profileLinks) {
-          const href = link.getAttribute('href');
-          // Look for proper username format (not ID format starting with ACo)
-          const match = href.match(/\/in\/([a-zA-Z0-9-_]+)\/?/);
-          if (match && !match[1].startsWith('ACo') && !match[1].includes('%')) {
-            profileUsername = match[1];
-            break;
-          }
-        }
-        
-        // Look for existing post URLs with correct format
-        const allLinks = element.querySelectorAll('a[href]');
-        for (const link of allLinks) {
-          const href = link.getAttribute('href');
-          // Look for URLs with the correct LinkedIn post format
-          if (href && href.includes('/posts/') && href.includes('-activity-') && !href.includes('_xxx')) {
-            foundUrls.push(href);
-          }
-        }
-        
-        return {
-          urls: foundUrls,
-          activityId: activityId,
-          profileUsername: profileUsername
-        };
-      });
-      
-      // First, check if we found any properly formatted URLs
-      for (const url of urlData.urls) {
-        const fullUrl = url.startsWith('http') ? url : `https://www.linkedin.com${url}`;
-        console.log(`✓ Found properly formatted URL in DOM: ${fullUrl}`);
-        return fullUrl;
-      }
-      
-      // If no properly formatted URL found, but we have username and activity ID, construct one
-      if (urlData.profileUsername && urlData.activityId) {
-        // We can't predict the hashtags and final hash, but LinkedIn often redirects these
-        const constructedUrl = `https://www.linkedin.com/posts/${urlData.profileUsername}_activity-${urlData.activityId}`;
-        console.log(`✓ Constructed URL from username and activity: ${constructedUrl}`);
-        return constructedUrl;
-      }
-      
-      return null;
-    } catch (error) {
-      console.log(`Error extracting URL from DOM: ${error.message}`);
-      return null;
-    }
-  }
-
-  async getOriginalPostUrlFromMenu(postElement) {
-    try {
-      // Find the three-dot overflow menu button (as shown in your screenshot)
-      const overflowSelectors = [
-        'button[aria-label*="more actions"]',
-        'button[aria-label*="Open control menu"]',
-        'button[aria-label*="more options"]',
-        '.entity-result__overflow-actions-trigger-ember',
-        '.artdeco-dropdown__trigger',
-        'button.artdeco-button--circle[type="button"]',
-        'button[class*="overflow"]',
-        'button[data-test-overflow-menu-trigger]'
-      ];
-      
-      let overflowButton = null;
-      for (const selector of overflowSelectors) {
-        overflowButton = await postElement.$(selector);
-        if (overflowButton) {
-          console.log(`Found overflow button with selector: ${selector}`);
-          break;
-        }
-      }
-      
-      if (!overflowButton) {
-        console.log('No overflow button found');
-        return null;
-      }
-      
-      // Scroll button into view and click it
-      await overflowButton.scrollIntoView();
-      await this.randomDelay(500, 1000);
-      await overflowButton.click();
-      await this.randomDelay(1000, 1500);
-      
-      let originalPostUrl = null;
-      
-      try {
-        // Wait for dropdown menu to appear
-        await this.page.waitForSelector('.artdeco-dropdown__content, .artdeco-dropdown, [role="menu"]', { timeout: 5000 });
-        
-        // Look for "Copy link to post" option (as shown in your screenshot)
-        const dropdownSelectors = [
-          '.artdeco-dropdown__content',
-          '.artdeco-dropdown', 
-          '[role="menu"]',
-          '.overflow-actions-menu'
-        ];
-        
-        let foundDropdown = null;
-        for (const selector of dropdownSelectors) {
-          foundDropdown = await this.page.$(selector);
-          if (foundDropdown) break;
-        }
-        
-        if (foundDropdown) {
-          // Find all clickable items in the dropdown
-          const dropdownItems = await foundDropdown.$$('button, a, [role="menuitem"], .artdeco-dropdown__item');
-          
-          for (const item of dropdownItems) {
-            try {
-              const text = await item.evaluate(el => el.textContent?.toLowerCase().trim() || '');
-              console.log(`Dropdown item text: "${text}"`);
-              
-              // Look for "Copy link to post" (exact text from your screenshot)
-              if (text.includes('copy link to post') || 
-                  text.includes('copy link') && text.includes('post') ||
-                  text.includes('copier le lien')) { // French version
-                
-                console.log(`Found "Copy link to post" button: "${text}"`);
-                
-                // Clear any existing clipboard content first
-                try {
-                  await this.page.evaluate(() => {
-                    if (navigator.clipboard) {
-                      return navigator.clipboard.writeText('CLEARED');
-                    }
-                  });
-                  await this.randomDelay(500, 1000);
-                } catch (clearError) {
-                  console.log(`Could not clear clipboard: ${clearError.message}`);
-                }
-                
-                // Click the "Copy link to post" button
-                console.log('Clicking "Copy link to post" button...');
-                await item.click();
-                
-                // Wait longer for LinkedIn to copy to clipboard
-                await this.randomDelay(2000, 3000);
-                
-                // Try multiple methods to read from clipboard
-                try {
-                  originalPostUrl = await this.page.evaluate(async () => {
-                    // Method 1: Standard clipboard API
-                    if (navigator.clipboard && navigator.clipboard.readText) {
-                      try {
-                        const clipboardText = await navigator.clipboard.readText();
-                        if (clipboardText && clipboardText.trim() && clipboardText !== 'CLEARED') {
-                          return clipboardText.trim();
-                        }
-                      } catch (e) {
-                        console.log('Method 1 failed:', e.message);
-                      }
-                    }
-                    
-                    // Method 2: Try execCommand (fallback)
-                    try {
-                      const textArea = document.createElement('textarea');
-                      textArea.style.position = 'fixed';
-                      textArea.style.opacity = '0';
-                      document.body.appendChild(textArea);
-                      textArea.focus();
-                      document.execCommand('paste');
-                      const pastedText = textArea.value;
-                      document.body.removeChild(textArea);
-                      if (pastedText && pastedText.trim() && pastedText !== 'CLEARED') {
-                        return pastedText.trim();
-                      }
-                    } catch (e) {
-                      console.log('Method 2 failed:', e.message);
-                    }
-                    
-                    return null;
-                  });
-                  
-                  if (originalPostUrl && originalPostUrl.includes('/posts/')) {
-                    console.log(`✓ Successfully extracted original post URL: ${originalPostUrl}`);
-                    break;
-                  } else {
-                    console.log(`Clipboard content was: "${originalPostUrl}" - not a valid post URL`);
-                  }
-                } catch (clipboardError) {
-                  console.log(`All clipboard methods failed: ${clipboardError.message}`);
-                }
-              }
-            } catch (itemError) {
-              console.log(`Error with dropdown item: ${itemError.message}`);
-            }
-          }
-        }
-      } catch (error) {
-        console.log(`Error finding dropdown menu: ${error.message}`);
-      }
-      
-      // Close the dropdown by clicking elsewhere or pressing Escape
-      try {
-        await this.page.keyboard.press('Escape');
-        await this.randomDelay(500, 1000);
-      } catch (error) {
-        try {
-          await this.page.click('body');
-          await this.randomDelay(500, 1000);
-        } catch (closeError) {
-          // Ignore close errors
-        }
-      }
-      
-      return originalPostUrl;
-      
-    } catch (error) {
-      console.warn(`Error extracting original URL from menu: ${error.message}`);
-      return null;
-    }
-  }
-
-  async extractPostData(postElement) {
-    try {
-      // Strategy 1: Try to get URL directly from DOM (faster)
-      let originalPostUrl = await this.getOriginalPostUrlFromDOM(postElement);
-      
-      // Strategy 2: If DOM approach failed, try clipboard method (slower but more accurate)
-      if (!originalPostUrl && this.realUrlsExtracted < 10) { // Limit clipboard attempts to first 10 posts
-        console.log('DOM extraction failed, trying clipboard method...');
-        originalPostUrl = await this.getOriginalPostUrlFromMenu(postElement);
-      }
-      
-      if (originalPostUrl) {
-        this.realUrlsExtracted++;
-        console.log(`✓ Extracted real URL ${this.realUrlsExtracted}: ${originalPostUrl}`);
-      }
-      
-      const data = await postElement.evaluate((element) => {
-        // Extract activityId from various sources based on actual structure
+      return await postElement.evaluate((element) => {
+        // Simple activity ID extraction - just find the activity ID
         let activityId = null;
         
         // Strategy 1: From data-chameleon-result-urn attribute
@@ -451,22 +193,12 @@ class LinkedInSavedPostsExporter {
           if (match) activityId = match[1];
         }
         
-        // Strategy 2: From feed update link href
-        if (!activityId) {
-          const linkElement = element.querySelector('a[href*="/feed/update/urn:li:activity:"]');
-          if (linkElement) {
-            const href = linkElement.getAttribute('href');
-            const match = href.match(/activity:(\d+)/);
-            if (match) activityId = match[1];
-          }
-        }
-        
-        // Strategy 3: From any href containing activity
+        // Strategy 2: From any href containing activity
         if (!activityId) {
           const allLinks = element.querySelectorAll('a[href*="activity"]');
           for (const link of allLinks) {
             const href = link.getAttribute('href');
-            const match = href.match(/activity:(\d{19})/); // LinkedIn activity IDs are typically 19 digits
+            const match = href.match(/activity[:%](\d{19})/); // 19-digit activity ID
             if (match) {
               activityId = match[1];
               break;
@@ -474,7 +206,26 @@ class LinkedInSavedPostsExporter {
           }
         }
         
-        if (!activityId) return null;
+        return activityId;
+      });
+    } catch (error) {
+      console.log(`Error extracting activity ID: ${error.message}`);
+      return null;
+    }
+  }
+
+
+  async extractPostData(postElement) {
+    try {
+      // Simplified: Just get the activity ID and generate fallback URL
+      let activityId = await this.getActivityIdFromElement(postElement);
+      
+      if (!activityId) {
+        console.log('Could not extract activity ID from post element');
+        return null;
+      }
+
+      const data = await postElement.evaluate((element) => {
         
         // Extract author info - based on actual structure
         let author = null;
@@ -528,22 +279,16 @@ class LinkedInSavedPostsExporter {
         }
         
         return {
-          activityId,
           author,
           snippet
         };
       });
       
-      // Add the real original URL if we found it, otherwise create a fallback URL
+      // Generate fallback URL using the extracted activity ID
       if (data) {
-        if (originalPostUrl) {
-          data.originalPostUrl = originalPostUrl;
-        } else {
-          // Fallback: create a LinkedIn post URL with proper format that might work
-          // LinkedIn sometimes redirects these generic activity URLs to the proper post
-          console.log(`Could not extract real URL for post ${data.activityId}, using fallback URL`);
-          data.originalPostUrl = `https://www.linkedin.com/feed/update/urn:li:activity:${data.activityId}`;
-        }
+        data.activityId = activityId; // Use the activity ID we extracted earlier
+        data.originalPostUrl = `https://www.linkedin.com/feed/update/urn:li:activity:${activityId}`;
+        console.log(`✓ Generated fallback URL for post ${activityId}: ${data.originalPostUrl}`);
         return data;
       }
       
@@ -618,23 +363,144 @@ class LinkedInSavedPostsExporter {
     return false; // No button found or clicked
   }
 
+  async waitForNetworkIdle(timeout = 5000) {
+    let networkIdleTimer = null;
+    let pendingRequests = 0;
+    let resolved = false;
+
+    return new Promise((resolve) => {
+      const requestHandler = () => {
+        pendingRequests++;
+        if (networkIdleTimer) {
+          clearTimeout(networkIdleTimer);
+          networkIdleTimer = null;
+        }
+      };
+
+      const responseHandler = () => {
+        pendingRequests--;
+        if (pendingRequests === 0 && !resolved) {
+          networkIdleTimer = setTimeout(() => {
+            if (!resolved) {
+              resolved = true;
+              this.page.off('request', requestHandler);
+              this.page.off('response', responseHandler);
+              resolve();
+            }
+          }, 1000); // Wait 1 second after last response
+        }
+      };
+
+      // Set maximum timeout
+      const maxTimeout = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          this.page.off('request', requestHandler);
+          this.page.off('response', responseHandler);
+          console.log('Network idle timeout reached');
+          resolve();
+        }
+      }, timeout);
+
+      this.page.on('request', requestHandler);
+      this.page.on('response', responseHandler);
+
+      // If already idle, resolve immediately
+      if (pendingRequests === 0) {
+        setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            this.page.off('request', requestHandler);
+            this.page.off('response', responseHandler);
+            clearTimeout(maxTimeout);
+            resolve();
+          }
+        }, 1000);
+      }
+    });
+  }
+
+  async waitForSpinnerToDisappear(maxWait = 10000) {
+    const spinnerSelectors = [
+      '.loading-spinner',
+      '[role="progressbar"]',
+      '.artdeco-spinner',
+      '.spinner',
+      'svg[role="img"][aria-label*="Loading"]'
+    ];
+
+    try {
+      console.log('Waiting for loading spinner to appear and disappear...');
+      
+      // First, wait for spinner to appear (if it's going to)
+      let spinnerFound = false;
+      const spinnerAppearTimeout = 2000;
+      
+      try {
+        await this.page.waitForSelector(spinnerSelectors.join(', '), { 
+          timeout: spinnerAppearTimeout 
+        });
+        spinnerFound = true;
+        console.log('✓ Loading spinner detected');
+      } catch (e) {
+        console.log('No spinner detected initially');
+      }
+
+      if (spinnerFound) {
+        // Wait for spinner to disappear
+        await this.page.waitForFunction(() => {
+          const selectors = [
+            '.loading-spinner',
+            '[role="progressbar"]',
+            '.artdeco-spinner',
+            '.spinner',
+            'svg[role="img"][aria-label*="Loading"]'
+          ];
+          
+          return !selectors.some(selector => {
+            const elements = document.querySelectorAll(selector);
+            return Array.from(elements).some(el => 
+              el.offsetParent !== null || // visible
+              getComputedStyle(el).display !== 'none'
+            );
+          });
+        }, { timeout: maxWait });
+        
+        console.log('✓ Loading spinner disappeared - content should be loaded');
+        // Additional wait for content to render
+        await this.randomDelay(1000, 2000);
+      }
+    } catch (error) {
+      console.log(`Spinner wait timeout: ${error.message}`);
+    }
+  }
+
   async scrollAndExtractPosts() {
-    console.log('Starting post extraction with hybrid pagination handling...');
+    console.log('Starting post extraction with viewport-aware pagination handling...');
     const startTime = Date.now();
     const maxTime = this.maxTimeMinutes * 60 * 1000;
     let idleRounds = 0;
     let lastPostCount = 0;
+    let consecutiveNoNewPosts = 0;
+    
+    // Detect viewport type to determine loading strategy
+    const viewport = await this.page.viewport();
+    const isPortraitMode = viewport.height > viewport.width;
+    console.log(`Viewport: ${viewport.width}x${viewport.height} - ${isPortraitMode ? 'Portrait (button mode)' : 'Landscape (lazy loading mode)'}`);
     
     while (idleRounds < this.maxIdleRounds && (Date.now() - startTime) < maxTime) {
       // Expand "See more" buttons for individual posts before extracting
       await this.expandSeeMore();
       
-      // Get all saved post elements based on actual LinkedIn structure
+      // Get all saved post elements with more robust selectors
       const postSelectors = [
-        '.EEMHJwgiaepGoaANgOiExBohJpfRvkAjJV', // Individual saved post items
-        '[data-chameleon-result-urn*="activity"]', // Items with activity URN
+        '[data-chameleon-result-urn*="activity"]', // Most reliable - items with activity URN
+        '.feed-shared-update-v2', // Standard post container
         '.entity-result__content-container', // Content containers
-        'li[class*="EEMHJwgiaepGoaANgOiExBohJpfRvkAjJV"]'
+        'article[data-id]', // Article elements with data-id
+        '[data-urn*="activity"]', // Any element with activity URN
+        'li[class*="result"]', // Generic result list items
+        '.update-components-actor' // Actor components
       ];
       
       let postElements = [];
@@ -662,86 +528,112 @@ class LinkedInSavedPostsExporter {
       
       // Check if we found new posts
       if (currentPostCount === lastPostCount) {
-        console.log('No new posts found since last check...');
+        consecutiveNoNewPosts++;
+        console.log(`No new posts found since last check (${consecutiveNoNewPosts} times)...`);
         
-        // Strategy 1: Try clicking "Show more results" button first
-        console.log('Strategy 1: Looking for "Show more results" button...');
-        const clickedShowMore = await this.clickShowMoreResults();
-        if (clickedShowMore) {
-          console.log('✓ Successfully clicked "Show more results", continuing extraction...');
-          // Don't increment idle counter, continue immediately
-          continue;
-        }
-        
-        // Strategy 2: Try aggressive scrolling for lazy loading
-        console.log('Strategy 2: Trying aggressive scrolling for lazy loading...');
-        await this.page.evaluate(() => {
-          // Scroll to bottom multiple times with different approaches
-          const scrollHeight = Math.max(
-            document.body.scrollHeight,
-            document.documentElement.scrollHeight
-          );
+        if (isPortraitMode) {
+          // Portrait mode: Look for "Show more results" button
+          console.log('Portrait mode: Looking for "Show more results" button...');
+          const clickedShowMore = await this.clickShowMoreResults();
+          if (clickedShowMore) {
+            console.log('✓ Successfully clicked "Show more results", waiting for content...');
+            await this.waitForNetworkIdle(8000);
+            await this.waitForSpinnerToDisappear();
+            consecutiveNoNewPosts = 0; // Reset counter
+            continue;
+          }
+        } else {
+          // Landscape mode: Use lazy loading with intersection observer simulation
+          console.log('Landscape mode: Simulating intersection observer for lazy loading...');
           
-          // Main window scroll
-          window.scrollTo(0, scrollHeight);
-          
-          // Find and scroll the main content containers
-          const containers = [
-            '.scaffold-finite-scroll__content',
-            '.workflow-results-container', 
-            'main[role="main"]',
-            '.feed-container',
-            '.application-outlet'
-          ];
-          
-          containers.forEach(selector => {
-            const container = document.querySelector(selector);
-            if (container) {
-              container.scrollTop = container.scrollHeight;
-            }
+          // Advanced scrolling technique for lazy loading
+          const scrollResult = await this.page.evaluate(() => {
+            const startHeight = document.body.scrollHeight;
+            
+            // Scroll to trigger lazy loading
+            const scrollToEnd = () => {
+              window.scrollTo(0, document.body.scrollHeight);
+            };
+            
+            // Simulate rapid scrolling that triggers intersection observers
+            const simulateScrolling = () => {
+              const currentScroll = window.pageYOffset;
+              const maxScroll = document.body.scrollHeight - window.innerHeight;
+              
+              // Scroll up 20% then back down
+              window.scrollTo(0, currentScroll - (window.innerHeight * 0.2));
+              setTimeout(() => {
+                window.scrollTo(0, maxScroll);
+              }, 100);
+            };
+            
+            scrollToEnd();
+            simulateScrolling();
+            
+            return {
+              startHeight,
+              endHeight: document.body.scrollHeight
+            };
           });
-        });
-        
-        // Wait for lazy loading to potentially trigger
-        await this.randomDelay(3000, 5000);
-        
-        // Strategy 3: Try scrolling up and down to trigger intersection observers
-        console.log('Strategy 3: Triggering intersection observers...');
-        await this.page.evaluate(() => {
-          // Scroll up a bit, then back down (triggers intersection observers)
-          window.scrollBy(0, -200);
-          setTimeout(() => {
-            window.scrollTo(0, document.body.scrollHeight);
-          }, 500);
-        });
-        
-        await this.randomDelay(2000, 3000);
-        
-        // Check one more time for the "Show more" button after scrolling
-        console.log('Final check: Looking for "Show more results" button after scrolling...');
-        const finalClickCheck = await this.clickShowMoreResults();
-        if (finalClickCheck) {
-          console.log('✓ Found and clicked "Show more results" button after scrolling!');
-          continue; // Don't increment idle counter
+          
+          console.log(`Page height: ${scrollResult.startHeight} -> ${scrollResult.endHeight}`);
+          
+          // Wait for network activity and spinner
+          await this.waitForNetworkIdle(8000);
+          await this.waitForSpinnerToDisappear();
+          
+          // Additional intersection observer trigger
+          await this.page.evaluate(() => {
+            // Find the main content container and scroll it
+            const containers = [
+              '.scaffold-finite-scroll__content',
+              'main[role="main"]',
+              '.application-outlet'
+            ];
+            
+            containers.forEach(selector => {
+              const container = document.querySelector(selector);
+              if (container) {
+                container.scrollTop = container.scrollHeight;
+                // Trigger a scroll event
+                container.dispatchEvent(new Event('scroll'));
+              }
+            });
+          });
+          
+          await this.randomDelay(2000, 3000);
         }
         
-        // If all strategies failed, increment idle counter
-        idleRounds++;
-        console.log(`All loading strategies failed. Idle round ${idleRounds}/${this.maxIdleRounds}`);
+        // Final fallback: check for button even in landscape mode (sometimes appears)
+        if (consecutiveNoNewPosts >= 2) {
+          console.log('Final fallback: Checking for "Show more results" button...');
+          const finalClickCheck = await this.clickShowMoreResults();
+          if (finalClickCheck) {
+            console.log('✓ Found and clicked "Show more results" button in final check!');
+            await this.waitForNetworkIdle(8000);
+            await this.waitForSpinnerToDisappear();
+            consecutiveNoNewPosts = 0;
+            continue;
+          }
+        }
+        
+        // If we've tried multiple times without success, increment idle counter
+        if (consecutiveNoNewPosts >= 3) {
+          idleRounds++;
+          consecutiveNoNewPosts = 0; // Reset for next iteration
+          console.log(`Multiple attempts failed. Idle round ${idleRounds}/${this.maxIdleRounds}`);
+        }
       } else {
-        // Found new posts, reset idle counter
+        // Found new posts, reset all counters
         idleRounds = 0;
+        consecutiveNoNewPosts = 0;
+        const newPostsCount = currentPostCount - lastPostCount;
         lastPostCount = currentPostCount;
-        console.log(`✓ Found ${currentPostCount - lastPostCount} new posts! Continuing...`);
+        console.log(`✓ Found ${newPostsCount} new posts! Total: ${currentPostCount}`);
       }
       
-      // Always do a gentle scroll at the end (helps with lazy loading detection)
-      await this.page.evaluate(() => {
-        window.scrollTo(0, document.body.scrollHeight);
-      });
-      
-      // Shorter delay between actions since we already waited above
-      await this.randomDelay(500, 1000);
+      // Small delay before next iteration
+      await this.randomDelay(1000, 2000);
     }
     
     const finalCount = this.posts.size;

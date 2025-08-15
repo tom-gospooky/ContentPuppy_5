@@ -16,7 +16,8 @@
       "Bash(npm run server:*)",
       "Bash(npm run dev:*)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(gh repo create:*)"
     ],
     "deny": [],
     "ask": [],
