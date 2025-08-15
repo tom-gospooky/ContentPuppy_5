@@ -1,0 +1,14 @@
+{
+  "exportedAt": "2025-08-13T20:41:58.502Z",
+  "count": 10,
+  "items": [
+    {
+      "activityId": "7360742711169019905",
+      "postUrl": "https://www.linkedin.com/feed/update/urn:li:activity:7360742711169019905?updateEntityUrn=urn%3Ali%3Afs_updateV2%3A%28urn%3Ali%3Aactivity%3A7360742711169019905%2CFEED_DETAIL%2CEMPTY%2CDEFAULT%2Cfalse%29",
+      "originalPostUrl": "https://www.linkedin.com/posts/ACoAAB12PtkB11yNd0f2VVxzpvVERlCwxD62W88_7360742711169019905_xxx",
+      "alternativeUrl": "https://www.linkedin.com/posts/activity-7360742711169019905",
+      "author": "Quentin Valembois",
+      "snippet": "Niantic just brought their Spatial SDK to Meta Quest 3! Since the release of the passthrough camera API, developers now have real-time access to the headset's camera feed and Niantic (the Pokémon GO creators) used this opportunity to bring their solution to Meta's SDK with : Live Scene Meshing Semantic Segmentation Object Detection Centimeter-Accurate VPS This is a massive news for Quest devs… though these services are not completely free."
+    }
+  ]
+}
